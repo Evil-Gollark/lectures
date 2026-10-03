@@ -283,8 +283,8 @@ class Slot:
     """
 
     def __init__(self, day, begin, end, names=(), count=0):
-        if begin>end:
-            raise ValueError("起始时间在结束时间之前")
+        if begin > end:
+            raise ValueError("起始时间晚于结束时间")
         self.day = day
         self.begin = begin
         self.end = end
