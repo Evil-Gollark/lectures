@@ -129,7 +129,6 @@ def _ask_free_options():
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     tt = Timetable()
-    print(argv)
     opts, err = _parse_args(argv)
     if err:
         print(f"[错误] {err}")
