@@ -14,8 +14,9 @@ __all__ = [
     "WEEKDAYS", "Time", "Lecture", "Timetable", "Slot",
     "DEFAULT_WINDOW", "MERGE_GAP",
     "parse_day", "parse_time", "parse_window",
-    "read_csv", "choose_csv", "input_manual",
+    "read_csv", "load_timetable", "choose_csv", "input_manual",
     "merge_lectures", "free_slots", "output", "output_free",
+    "intersect", "common_free", "output_common",
     "_ask", "_fmt",
 ]
 
@@ -246,6 +247,17 @@ def read_csv(path):
             continue
         lectures.append(Lecture(begin, end, name))
     return lectures
+
+
+def load_timetable(path):
+    """读一份课表 CSV，返回 (人名, Timetable)。
+
+    人名取文件名（去掉 .csv）—— 找共同空闲时一人一个文件，不用另外敲名字。
+    """
+    name = os.path.splitext(os.path.basename(path))[0] or path
+    tt = Timetable()
+    tt.extend(read_csv(path))
+    return name, tt
 
 
 # ---- 时间段工具：课表视图和空闲时段都要用 -----------------------------------
@@ -488,6 +500,99 @@ def output_free(lst, window=DEFAULT_WINDOW, gap=MERGE_GAP):
     print(line)
     print(f"本周空闲合计 {_hm(total_free)}（每天可用 {_hm(win_end - win_begin)}）")
     return total_free
+
+
+# ---- 需求三：多个人的共同空闲时间 -------------------------------------------
+def _intersect(a, b):
+    """两个 Slot 的交集（同一天才算）。没有重叠、或者只挨着，返回 None。"""
+    if a.day != b.day:
+        return None
+    start, end = max(a.begin, b.begin), min(a.end, b.end)
+    if start >= end:
+        return None
+    return Slot(a.day, start, end)
+
+
+def _intersect_pair(a_list, b_list):
+    """两组时间段（[Slot, ...]）里，任意一段跟任意一段的交集，合起来返回。"""
+    out = []
+    for a in a_list:
+        for b in b_list:
+            piece = _intersect(a, b)
+            if piece is not None:
+                out.append(piece)
+    out.sort(key=lambda s: s.begin)
+    return out
+
+
+def intersect(a, b, *others):
+    """把几组时间段取交集：a、b、others 都是 [Slot, ...]。返回排好序的一组时间段。
+
+    先算 a 和 b 的交集，再拿结果跟 others 里的每一组继续交 —— 交到最后剩下的，
+    就是「所有组都有」的时间。某一组跟前面完全不重叠时会提前结束（后面再交也是空）。
+    """
+    pieces = _intersect_pair(list(a), list(b))
+    for other in others:
+        if not pieces:
+            break
+        pieces = _intersect_pair(pieces, other)
+    return pieces
+
+
+def common_free(timetables, window=DEFAULT_WINDOW, gap=MERGE_GAP):
+    """所有人的共同空闲时段。返回 {星期几: [空闲 Slot, ...]}，时间递增。
+
+    做法：先各算各的空闲时段（free_slots 会按 gap 合并他自己的连堂），
+    再把同一天里所有人的空闲时段取交集 —— 交集就是大家都空着的时间。
+    """
+    people = [free_slots(lst, window, gap) for lst in timetables]
+    if not people:  # 一个人都没给，那每天整个可用范围都是空的
+        return free_slots([], window, gap)
+    result = {}
+    for day in range(1, 8):
+        if len(people) == 1:
+            result[day] = people[0][day]
+        else:
+            result[day] = intersect(*[p[day] for p in people])
+    return result
+
+
+def output_common(timetables, window=DEFAULT_WINDOW, gap=MERGE_GAP, labels=None):
+    """打印「共同空闲时段」，按时间从长到短排。返回排好序的 [(星期几, Slot), ...]。"""
+    timetables = list(timetables)
+    labels = list(labels or [])
+    win_begin, win_end = window
+    line = "=" * 46
+    print()
+    print(line)
+    print(_center("共 同 空 闲 时 段", 46))
+    print(line)
+    who = []
+    for i, lst in enumerate(timetables):
+        name = labels[i] if i < len(labels) and labels[i] else f"第 {i + 1} 个人"
+        who.append(f"{name}（{len(list(lst))} 节课）")
+    print(f"参与的人（{len(timetables)} 位）：{'、'.join(who) if who else '（还没读入课表）'}")
+    print(f"可用范围：每天 {_fmt(win_begin)}-{_fmt(win_end)}；同一门课间隔 ≤ {gap} 分钟算连堂")
+
+    slots = common_free(timetables, window, gap)
+    ranked = [(day, s) for day in range(1, 8) for s in slots[day]]
+    # 越长越靠前；一样长就按星期几、开始时间排，保证每次输出顺序一样
+    ranked.sort(key=lambda item: (-item[1].minutes, item[0], item[1].begin))
+
+    print(line)
+    if not ranked:
+        print("（没有一段时间是所有人都空闲的）")
+        print(line)
+        return ranked
+    print(f"共 {len(ranked)} 段，按长度从长到短：")
+    for i, (day, s) in enumerate(ranked, 1):
+        tip = "（课间）" if s.minutes <= gap else ""
+        print(f"  {i:>2}. {WEEKDAYS[day - 1]}  {s}  {_hm(s.minutes)}{tip}")
+    print(line)
+    day, best = ranked[0]
+    print(f"最长的一段：{WEEKDAYS[day - 1]} {best}，{_hm(best.minutes)}")
+    print(f"共同空闲合计 {_hm(sum(s.minutes for _, s in ranked))}")
+    return ranked
 
 
 def _ask(prompt):
